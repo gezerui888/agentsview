@@ -757,7 +757,7 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 			readTop()
-			assert.EqualValues(t, 2, prepares.Load(), "totals skip the window metadata that Top sessions still needs")
+			assert.EqualValues(t, 2, prepares.Load(), "totals and Top sessions use separate memo entries")
 		})
 	}
 }
@@ -779,6 +779,7 @@ func TestUsageJournaledDedupInvalidation(t *testing.T) {
 	got, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 20, got.Totals.OutputTokens)
+	assertUsageDayTotals(t, cache)
 }
 
 func TestUsageJournaledDelayedBuildAfterPeerInvalidation(t *testing.T) {
