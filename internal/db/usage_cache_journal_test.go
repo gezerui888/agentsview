@@ -143,7 +143,7 @@ func assertJournaledUsageLegacy(t *testing.T, database *DB, filter UsageFilter) 
 }
 
 func TestUsageJournaledFreshness(t *testing.T) {
-	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "price", "price with filter", "second handle"} {
+	for _, name := range []string{"append", "soft delete", "hard delete", "restore", "start date", "message date", "agent", "project", "machine", "branch", "automation", "user messages", "price", "price with filter", "second handle"} {
 		t.Run(name, func(t *testing.T) {
 			database := testDB(t)
 			seedJournaledUsage(t, database, "session")
@@ -165,7 +165,20 @@ func TestUsageJournaledFreshness(t *testing.T) {
 			if name == "restore" {
 				require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
 			}
-			warmJournaledUsage(t, database, filter)
+			switch name {
+			case "project":
+				filter.Project = "changed"
+			case "machine":
+				filter.Machine = "changed"
+			case "branch":
+				filter.GitBranch = EncodeBranchFilterToken("project", "changed")
+			case "automation":
+				filter.AutomatedScope = "automated"
+			case "user messages":
+				filter.MinUserMessages = 3
+			}
+			cache := warmJournaledUsage(t, database, filter)
+			assertUsageDayTotals(t, cache)
 			switch name {
 			case "append":
 				require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-11T01:00:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
@@ -184,6 +197,16 @@ func TestUsageJournaledFreshness(t *testing.T) {
 			case "agent":
 				_, err := database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET agent='claude' WHERE id='session'`)
 				require.NoError(t, err)
+			case "project", "machine", "branch", "automation", "user messages":
+				column, value := map[string]string{"project": "project", "machine": "machine", "branch": "git_branch", "automation": "is_automated", "user messages": "user_message_count"}[name], any("changed")
+				if name == "automation" {
+					value = 1
+				}
+				if name == "user messages" {
+					value = 3
+				}
+				_, err := database.getWriter().ExecContext(t.Context(), "UPDATE sessions SET "+column+"=? WHERE id='session'", value)
+				require.NoError(t, err)
 			case "price", "price with filter":
 				require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 2_000_000}}}))
 			case "second handle":
@@ -193,6 +216,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				require.NoError(t, other.Close())
 			}
 			assertJournaledUsageLegacy(t, database, filter)
+			assertUsageDayTotals(t, cache)
 			if name == "price with filter" {
 				got, err := database.GetDailyUsage(t.Context(), filter)
 				require.NoError(t, err)
@@ -692,7 +716,7 @@ func TestUsageJournaledPassRejectsForeignCatalog(t *testing.T) {
 	assertJournaledUsageLegacy(t, database, filter)
 }
 
-func TestUsageJournaledTopSharesSummary(t *testing.T) {
+func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
 		database := openDailyUsageFixtureDB(t)
 		filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"}
@@ -733,7 +757,7 @@ func TestUsageJournaledTopSharesSummary(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 			readTop()
-			assert.EqualValues(t, 1, prepares.Load())
+			assert.EqualValues(t, 2, prepares.Load(), "totals skip the window metadata that Top sessions still needs")
 		})
 	}
 }
